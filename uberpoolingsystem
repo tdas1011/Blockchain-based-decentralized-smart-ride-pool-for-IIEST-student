@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract SmartRidePool {
+
+    struct Ride {
+        uint256 rideId;
+        address driver;
+        address[] passengers;
+        uint256 farePerPerson;
+        uint256 totalLockedAmount;
+        uint256 maxPassengers;
+        bool started;
+        bool completed;
+        mapping(address => bool) hasJoined;
+        mapping(address => bool) hasBoarded;
+    }
+
+    uint256 public rideCounter;
+    mapping(uint256 => Ride) private rides;
+
+    // EVENTS
+    event RideCreated(uint256 rideId, address driver);
+    event PassengerJoined(uint256 rideId, address passenger);
+    event RideStarted(uint256 rideId);
+    event PassengerBoarded(uint256 rideId, address passenger);
+    event RideCompleted(uint256 rideId);
+    event PaymentReleased(uint256 rideId, uint256 amount);
+    event PenaltyApplied(address passenger, uint256 amount);
+
+    // CREATE RIDE
+    function createRide(uint256 _farePerPerson, uint256 _maxPassengers) public {
+        rideCounter++;
+
+        Ride storage r = rides[rideCounter];
+        r.rideId = rideCounter;
+        r.driver = msg.sender;
+        r.farePerPerson = _farePerPerson;
+        r.maxPassengers = _maxPassengers;
+
+        emit RideCreated(rideCounter, msg.sender);
+    }
+
+    // JOIN RIDE + LOCK PAYMENT
+    function joinRide(uint256 _rideId) public payable {
+        Ride storage r = rides[_rideId];
+
+        require(!r.started, "Ride already started");
+        require(!r.hasJoined[msg.sender], "Already joined");
+        require(r.passengers.length < r.maxPassengers, "Ride full");
+        require(msg.value == r.farePerPerson, "Incorrect fare");
+
+        r.passengers.push(msg.sender);
+        r.hasJoined[msg.sender] = true;
+        r.totalLockedAmount += msg.value;
+
+        emit PassengerJoined(_rideId, msg.sender);
+    }
+
+    // START RIDE (driver confirms)
+    function startRide(uint256 _rideId) public {
+        Ride storage r = rides[_rideId];
+
+        require(msg.sender == r.driver, "Only driver");
+        require(!r.started, "Already started");
+
+        r.started = true;
+
+        emit RideStarted(_rideId);
+    }
+
+    // PASSENGER BOARDING CONFIRMATION (OTP/GPS simulated)
+    function confirmBoarding(uint256 _rideId) public {
+        Ride storage r = rides[_rideId];
+
+        require(r.hasJoined[msg.sender], "Not a passenger");
+        require(r.started, "Ride not started");
+
+        r.hasBoarded[msg.sender] = true;
+
+        emit PassengerBoarded(_rideId, msg.sender);
+    }
+
+    // APPLY PENALTY (for no-show passengers)
+    function applyPenalty(uint256 _rideId, address passenger) public {
+        Ride storage r = rides[_rideId];
+
+        require(msg.sender == r.driver, "Only driver");
+        require(r.hasJoined[passenger], "Not a passenger");
+        require(!r.hasBoarded[passenger], "Passenger boarded");
+
+        uint256 penalty = r.farePerPerson;
+
+        // penalty goes to driver
+        payable(r.driver).transfer(penalty);
+
+        r.totalLockedAmount -= penalty;
+
+        emit PenaltyApplied(passenger, penalty);
+    }
+
+    // COMPLETE RIDE + RELEASE PAYMENT
+    function completeRide(uint256 _rideId) public {
+        Ride storage r = rides[_rideId];
+
+        require(msg.sender == r.driver, "Only driver");
+        require(r.started, "Ride not started");
+        require(!r.completed, "Already completed");
+
+        r.completed = true;
+
+        uint256 amount = r.totalLockedAmount;
+
+        r.totalLockedAmount = 0;
+
+        payable(r.driver).transfer(amount);
+
+        emit RideCompleted(_rideId);
+        emit PaymentReleased(_rideId, amount);
+    }
+
+    // VIEW FUNCTIONS
+    function getPassengers(uint256 _rideId) public view returns (address[] memory) {
+        return rides[_rideId].passengers;
+    }
+
+    function getRideDetails(uint256 _rideId)
+        public
+        view
+        returns (
+            address driver,
+            uint256 fare,
+            uint256 totalAmount,
+            bool started,
+            bool completed
+        )
+    {
+        Ride storage r = rides[_rideId];
+        return (
+            r.driver,
+            r.farePerPerson,
+            r.totalLockedAmount,
+            r.started,
+            r.completed
+        );
+    }
+}
